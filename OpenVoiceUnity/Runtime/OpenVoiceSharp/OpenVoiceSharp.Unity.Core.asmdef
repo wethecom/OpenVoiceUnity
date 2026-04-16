@@ -1,0 +1,18 @@
+{
+    "name": "OpenVoiceSharp.Unity.Core",
+    "rootNamespace": "OpenVoiceSharp",
+    "references": [],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "OpusDotNet.dll",
+        "RNNoiseSharp.dll",
+        "WebRtcVadSharp.dll"
+    ],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

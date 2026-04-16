@@ -1,0 +1,15 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2011/08/nuspec.xsd">
+  <metadata>
+    <id>RNNoiseSharp</id>
+    <version>1.0.0</version>
+    <authors>Georgios Sgouridis</authors>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <license type="expression">BSD-3-Clause</license>
+    <licenseUrl>https://licenses.nuget.org/BSD-3-Clause</licenseUrl>
+    <projectUrl>https://github.com/gsgou/RNNoiseSharp</projectUrl>
+    <description>.NET Wrapper Library for Mozilla's RNNoise</description>
+    <copyright>Copyright 2022</copyright>
+    <language>en-US</language>
+  </metadata>
+</package>

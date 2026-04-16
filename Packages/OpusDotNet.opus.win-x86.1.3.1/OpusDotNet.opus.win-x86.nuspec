@@ -1,0 +1,14 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2010/07/nuspec.xsd">
+  <metadata>
+    <id>OpusDotNet.opus.win-x86</id>
+    <version>1.3.1</version>
+    <authors>The Opus Audio Codec Authors</authors>
+    <owners>The Opus Audio Codec Authors</owners>
+    <requireLicenseAcceptance>true</requireLicenseAcceptance>
+    <license type="file">LICENSE.txt</license>
+    <licenseUrl>https://aka.ms/deprecateLicenseUrl</licenseUrl>
+    <projectUrl>https://opus-codec.org/</projectUrl>
+    <description>Contains 32-bit binaries for OpusDotNet.</description>
+  </metadata>
+</package>
