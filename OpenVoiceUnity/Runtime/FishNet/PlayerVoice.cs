@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Concurrent;
 using FishNet.Object;
 using FishNet.Transporting;
@@ -56,14 +57,20 @@ namespace OpenVoiceSharp.Unity
 
         private VoiceChatInterface decoder;
 
-        // CircularAudioBuffer from the original OpenVoiceSharp library.
-        // float samples, 18 chunks × 960 samples = 360ms of buffer (standard Unity recommendation).
-        // Declared as a field so we can use it as a ref struct properly.
-        private CircularAudioBuffer<float> playbackBuffer;
-        private bool playbackBufferReady = false;
+        // Thread-safe queue between network decode and Unity audio thread.
+        // Buffers are rented from ArrayPool to avoid per-packet GC allocations.
+        private readonly ConcurrentQueue<QueuedSamples> playbackQueue = new();
+        private QueuedSamples activePlayback;
+        private int activePlaybackIndex;
+        private bool hasActivePlayback;
 
-        // Reusable read array for OnAudioFilterRead — allocated once.
-        private float[] audioReadTemp;
+        private const int MaxQueuedFrames = 64;
+
+        private struct QueuedSamples
+        {
+            public float[] Buffer;
+            public int Length;
+        }
 
         private AudioSource audioSource;
 
@@ -93,6 +100,8 @@ namespace OpenVoiceSharp.Unity
                 micCapture.DataAvailable -= OnMicDataAvailable;
                 micCapture.StopRecording();
             }
+
+            FlushPlaybackQueue();
         }
 
         // ── Setup ──────────────────────────────────────────────────
@@ -102,15 +111,6 @@ namespace OpenVoiceSharp.Unity
             // One VoiceChatInterface per remote speaker for decode — no encoder needed on this side.
             // EnableNoiseSuppression = false on the decoder: noise suppression was already applied by the sender.
             decoder = new VoiceChatInterface(enableNoiseSuppression: false);
-
-            // CircularAudioBuffer<float> — 960 samples per chunk (one 20ms Opus frame at 48kHz),
-            // 18 chunks = 360ms total buffer depth. Same as the Unity recommendation in the original library.
-            int chunkSize = VoiceUtilities.GetSampleSize(channels: 1) / 2; // GetSampleSize returns bytes; /2 = float count
-            playbackBuffer = new CircularAudioBuffer<float>(chunkSize, RecommendedChunkAmount.Unity);
-            playbackBufferReady = true;
-
-            // Largest DSP buffer Unity will request in OnAudioFilterRead at 48kHz
-            audioReadTemp = new float[4096];
 
             audioSource = GetComponent<AudioSource>();
             audioSource.spatialBlend = 1f;                        // full 3D so distance rolloff works
@@ -185,27 +185,35 @@ namespace OpenVoiceSharp.Unity
         [ObserversRpc(ExcludeOwner = true, RunLocally = false)]
         private void BroadcastVoiceToObservers(byte[] packet, Channel channel = Channel.Unreliable)
         {
-            if (!playbackBufferReady) return;
+            if (decoder == null) return;
 
             var (decoded, decodedLength) = decoder.WhenDataReceived(packet, packet.Length);
+            if (decodedLength <= 0) return;
 
             // WhenDataReceived returns 16-bit PCM bytes.
-            // VoiceUtilities.Convert16BitToFloat converts to float[] for the buffer.
             // decodedLength bytes / 2 = sample count (16-bit = 2 bytes per sample).
             int sampleCount = decodedLength / 2;
-            float[] floatSamples = new float[sampleCount];
-            VoiceUtilities.Convert16BitToFloat(decoded, floatSamples);
+            float[] rented = ArrayPool<float>.Shared.Rent(sampleCount);
 
-            // Push complete chunks into the CircularAudioBuffer.
-            // The buffer silently drops chunks when full — no overflow, no exception.
-            int chunkSize = playbackBuffer.ChunkSize;
-            int offset = 0;
-            while (offset + chunkSize <= sampleCount)
+            // Convert only the valid decoded samples into the rented buffer.
+            for (int i = 0; i < sampleCount; i++)
             {
-                float[] chunk = new float[chunkSize];
-                Array.Copy(floatSamples, offset, chunk, 0, chunkSize);
-                playbackBuffer.PushChunk(chunk);
-                offset += chunkSize;
+                short s = BitConverter.ToInt16(decoded, i * 2);
+                rented[i] = s / 32768f;
+            }
+
+            playbackQueue.Enqueue(new QueuedSamples
+            {
+                Buffer = rented,
+                Length = sampleCount
+            });
+
+            // Avoid unbounded latency/memory growth when receivers fall behind.
+            while (playbackQueue.Count > MaxQueuedFrames)
+            {
+                if (!playbackQueue.TryDequeue(out QueuedSamples dropped))
+                    break;
+                ArrayPool<float>.Shared.Return(dropped.Buffer);
             }
         }
 
@@ -216,30 +224,51 @@ namespace OpenVoiceSharp.Unity
         // AudioSource handles 3D distance rolloff automatically.
         private void OnAudioFilterRead(float[] data, int channels)
         {
-            if (!playbackBufferReady) return;
-
             int sampleCount = data.Length / channels;
-            int filled = 0;
 
-            while (filled < sampleCount && playbackBuffer.CanReadChunk)
+            for (int i = 0; i < sampleCount; i++)
             {
-                float[] chunk = playbackBuffer.ReadChunk();
-                int toCopy = Mathf.Min(chunk.Length, sampleCount - filled);
+                float sample = 0f;
 
-                for (int i = 0; i < toCopy; i++)
+                if (!hasActivePlayback)
                 {
-                    float sample = chunk[i];
-                    for (int c = 0; c < channels; c++)
-                        data[(filled + i) * channels + c] = sample;
+                    if (playbackQueue.TryDequeue(out QueuedSamples next))
+                    {
+                        activePlayback = next;
+                        activePlaybackIndex = 0;
+                        hasActivePlayback = true;
+                    }
                 }
 
-                filled += toCopy;
-            }
+                if (hasActivePlayback)
+                {
+                    sample = activePlayback.Buffer[activePlaybackIndex++];
+                    if (activePlaybackIndex >= activePlayback.Length)
+                    {
+                        ArrayPool<float>.Shared.Return(activePlayback.Buffer);
+                        activePlayback = default;
+                        activePlaybackIndex = 0;
+                        hasActivePlayback = false;
+                    }
+                }
 
-            // Zero-fill any remaining samples if the buffer ran dry (prevents noise on underrun)
-            for (int i = filled; i < sampleCount; i++)
                 for (int c = 0; c < channels; c++)
-                    data[i * channels + c] = 0f;
+                    data[i * channels + c] = sample;
+            }
+        }
+
+        private void FlushPlaybackQueue()
+        {
+            while (playbackQueue.TryDequeue(out QueuedSamples queued))
+                ArrayPool<float>.Shared.Return(queued.Buffer);
+
+            if (hasActivePlayback)
+            {
+                ArrayPool<float>.Shared.Return(activePlayback.Buffer);
+                activePlayback = default;
+                activePlaybackIndex = 0;
+                hasActivePlayback = false;
+            }
         }
     }
 }

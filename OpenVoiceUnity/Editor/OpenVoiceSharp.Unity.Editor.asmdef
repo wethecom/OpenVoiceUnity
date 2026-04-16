@@ -2,15 +2,16 @@
     "name": "OpenVoiceSharp.Unity.Editor",
     "rootNamespace": "OpenVoiceSharp.Unity.Editor",
     "references": [
-        "OpenVoiceSharp.Unity.Core",
-        "OpenVoiceSharp.Unity"
+        "OpenVoiceSharp.Unity.Core"
     ],
     "includePlatforms": ["Editor"],
     "excludePlatforms": [],
     "allowUnsafeCode": false,
     "overrideReferences": false,
     "autoReferenced": false,
-    "defineConstraints": [],
+    "defineConstraints": [
+        "OPENVOICE_UNITY_VOICECHAT"
+    ],
     "versionDefines": [],
     "noEngineReferences": false
 }

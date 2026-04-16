@@ -10,8 +10,10 @@
     "excludePlatforms": [],
     "allowUnsafeCode": false,
     "overrideReferences": false,
-    "autoReferenced": true,
-    "defineConstraints": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "OPENVOICE_UNITY_VOICECHAT"
+    ],
     "versionDefines": [],
     "noEngineReferences": false
 }

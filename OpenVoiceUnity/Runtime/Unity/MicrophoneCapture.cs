@@ -37,13 +37,13 @@ namespace OpenVoiceSharp.Unity
 
         // Loopback clip length — 1 second ring buffer is plenty
         private const int ClipLengthSeconds = 1;
+        private const float MicStartTimeoutSeconds = 5f;
 
         private AudioClip micClip;
         private int lastSamplePosition;
 
         // Reusable buffers — allocated once, never in the hot path
         private readonly float[] frameFloat = new float[FrameSamples];
-        private readonly short[] frameShort = new short[FrameSamples];
         private readonly byte[] frameBytes = new byte[FrameSamples * 2]; // 16-bit = 2 bytes per sample
 
         // ── Device Management ──────────────────────────────────────
@@ -98,19 +98,37 @@ namespace OpenVoiceSharp.Unity
 
         private IEnumerator WaitForMicStart()
         {
-            while (Microphone.GetPosition(CurrentDevice) <= 0)
-                yield return null;
+            float startTime = Time.realtimeSinceStartup;
+            while (true)
+            {
+                int position = Microphone.GetPosition(CurrentDevice);
+                if (position > 0)
+                {
+                    lastSamplePosition = position;
+                    IsRecording = true;
+                    yield break;
+                }
 
-            lastSamplePosition = Microphone.GetPosition(CurrentDevice);
-            IsRecording = true;
+                if (Time.realtimeSinceStartup - startTime > MicStartTimeoutSeconds)
+                {
+                    Debug.LogError($"[MicrophoneCapture] Microphone failed to start within {MicStartTimeoutSeconds:0.#}s.");
+                    StopRecording();
+                    yield break;
+                }
+
+                yield return null;
+            }
         }
 
         public void StopRecording()
         {
-            if (!IsRecording) return;
+            if (!IsRecording && micClip == null) return;
             IsRecording = false;
-            Microphone.End(CurrentDevice);
+            if (!string.IsNullOrEmpty(CurrentDevice) && Microphone.IsRecording(CurrentDevice))
+                Microphone.End(CurrentDevice);
+
             micClip = null;
+            lastSamplePosition = 0;
         }
 
         // ── Frame Polling ──────────────────────────────────────────
