@@ -1,10 +1,11 @@
+using System;
 using OpusDotNet;
 using RNNoiseSharp;
 using WebRtcVadSharp;
 
 namespace OpenVoiceSharp
 {
-    public sealed class VoiceChatInterface
+    public sealed class VoiceChatInterface : IDisposable
     {
         /// <summary>
         /// Opus frame length. (20ms)
@@ -43,6 +44,7 @@ namespace OpenVoiceSharp
         public bool FavorAudioStreaming { get; private set; } = false;
 
         private int ChannelsAmount => Stereo ? 2 : 1;
+        private int PcmFrameSize => VoiceUtilities.GetSampleSize(ChannelsAmount);
 
         // instances
         private readonly OpusEncoder OpusEncoder;
@@ -59,21 +61,29 @@ namespace OpenVoiceSharp
         /// </summary>
         /// <param name="pcmData">The raw pcm frame (in 16 bit PCM)</param>
         /// <returns>If voice activity was detected in the frame.</returns>
-        public bool IsSpeaking(byte[] pcmData) => VoiceActivityDetector.HasSpeech(pcmData);
+        public bool IsSpeaking(byte[] pcmData)
+        {
+            ThrowIfDisposed();
+            if (pcmData is null)
+                throw new ArgumentNullException(nameof(pcmData));
+
+            return VoiceActivityDetector.HasSpeech(pcmData);
+        }
 
         // stores float samples if needed
         private readonly float[] FloatSamples;
+        private bool IsDisposed;
 
-        private void ApplyNoiseSuppression(byte[] pcmData)
+        private void ApplyNoiseSuppression(byte[] pcmData, int length)
         {
             // convert to float32
-            VoiceUtilities.Convert16BitToFloat(pcmData, FloatSamples);
+            VoiceUtilities.Convert16BitToFloat(pcmData, FloatSamples, length);
 
             // apply noise suppression
             Denoiser.Denoise(FloatSamples);
 
             // convert back to 16 bit pcm
-            VoiceUtilities.ConvertFloatTo16Bit(FloatSamples, pcmData);
+            VoiceUtilities.ConvertFloatTo16Bit(FloatSamples, pcmData, length);
         }
 
         /// <summary>
@@ -84,8 +94,19 @@ namespace OpenVoiceSharp
         /// <returns>The encoded Opus data, along with its length.</returns>
         public (byte[] encodedOpusData, int encodedLength) SubmitAudioData(byte[] pcmData, int length)
         {
+            ThrowIfDisposed();
+            if (pcmData is null)
+                throw new ArgumentNullException(nameof(pcmData));
+            if (length <= 0 || length > pcmData.Length)
+                throw new ArgumentOutOfRangeException(nameof(length));
+            if (length != PcmFrameSize)
+                throw new ArgumentException(
+                    $"Expected exactly one {FrameLength}ms PCM frame ({PcmFrameSize} bytes), got {length}.",
+                    nameof(length)
+                );
+
             if (EnableNoiseSuppression)
-                ApplyNoiseSuppression(pcmData);
+                ApplyNoiseSuppression(pcmData, length);
 
             return (OpusEncoder.Encode(pcmData, length, out int encodedLength), encodedLength);
         }
@@ -97,7 +118,15 @@ namespace OpenVoiceSharp
         /// <param name="length">The length of the data</param>
         /// <returns>The decoded Opus data, along with its length.</returns>
         public (byte[] decodedOpusData, int decodedLength) WhenDataReceived(byte[] encodedData, int length)
-            => (OpusDecoder.Decode(encodedData, length, out int decodedLength), decodedLength);
+        {
+            ThrowIfDisposed();
+            if (encodedData is null)
+                throw new ArgumentNullException(nameof(encodedData));
+            if (length <= 0 || length > encodedData.Length)
+                throw new ArgumentOutOfRangeException(nameof(length));
+
+            return (OpusDecoder.Decode(encodedData, length, out int decodedLength), decodedLength);
+        }
 
         /// <summary>
         /// Creates a brand new OpenVoiceSharp voice chat interface to manage voice chat.
@@ -113,7 +142,11 @@ namespace OpenVoiceSharp
             bool enableNoiseSuppression = true,
             bool favorAudioStreaming = false,
             OperatingMode? vadOperatingMode = null
-        ) {
+        )
+        {
+            if (bitrate < 8_000 || bitrate > 512_000)
+                throw new ArgumentOutOfRangeException(nameof(bitrate), "Bitrate must be between 8000 and 512000.");
+
             Bitrate = bitrate;
             Stereo = stereo;
             EnableNoiseSuppression = enableNoiseSuppression;
@@ -121,14 +154,15 @@ namespace OpenVoiceSharp
             int channels = ChannelsAmount;
 
             // fill float samples for noise suppression
-            FloatSamples = new float[VoiceUtilities.GetSampleSize(channels) / 2];
+            FloatSamples = new float[PcmFrameSize / 2];
 
             // create opus encoder/decoder
             OpusEncoder = new(
                 FavorAudioStreaming ? Application.Audio : Application.VoIP,
                 SampleRate,
                 channels
-            ) {
+            )
+            {
                 Bitrate = Bitrate,
                 VBR = false,
                 ForceChannels = Stereo ? ForceChannels.Stereo : ForceChannels.Mono
@@ -139,6 +173,27 @@ namespace OpenVoiceSharp
 
             if (vadOperatingMode != null)
                 VoiceActivityDetector.OperatingMode = (OperatingMode)vadOperatingMode;
+        }
+
+        public void Dispose()
+        {
+            if (IsDisposed) return;
+
+            if (OpusEncoder is IDisposable opusEncoderDisposable)
+                opusEncoderDisposable.Dispose();
+            if (OpusDecoder is IDisposable opusDecoderDisposable)
+                opusDecoderDisposable.Dispose();
+            if (Denoiser is IDisposable denoiserDisposable)
+                denoiserDisposable.Dispose();
+            if (VoiceActivityDetector is IDisposable vadDisposable)
+                vadDisposable.Dispose();
+            IsDisposed = true;
+        }
+
+        private void ThrowIfDisposed()
+        {
+            if (IsDisposed)
+                throw new ObjectDisposedException(nameof(VoiceChatInterface));
         }
     }
 }

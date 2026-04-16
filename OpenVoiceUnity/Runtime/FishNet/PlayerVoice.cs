@@ -101,6 +101,11 @@ namespace OpenVoiceSharp.Unity
                 micCapture.StopRecording();
             }
 
+            encoder?.Dispose();
+            encoder = null;
+            decoder?.Dispose();
+            decoder = null;
+
             FlushPlaybackQueue();
         }
 
@@ -137,7 +142,14 @@ namespace OpenVoiceSharp.Unity
 
             micCapture = gameObject.AddComponent<MicrophoneCapture>();
             micCapture.DataAvailable += OnMicDataAvailable;
-            micCapture.StartRecording();
+            try
+            {
+                micCapture.StartRecording();
+            }
+            catch (InvalidOperationException ex)
+            {
+                Debug.LogWarning($"[PlayerVoice] Capture unavailable: {ex.Message}");
+            }
         }
 
         // ── Capture ────────────────────────────────────────────────
@@ -156,6 +168,9 @@ namespace OpenVoiceSharp.Unity
 
             while (micQueue.TryDequeue(out var item))
             {
+                if (encoder == null)
+                    break;
+
                 // Gate: push to talk key OR voice activity detection built into VoiceChatInterface
                 if (pushToTalk && !Input.GetKey(pushToTalkKey)) continue;
                 if (!pushToTalk && !encoder.IsSpeaking(item.data)) continue;

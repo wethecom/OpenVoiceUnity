@@ -54,12 +54,10 @@ namespace OpenVoiceSharp.Unity
         {
             string[] devices = GetMicrophones();
             if (devices == null || devices.Length == 0)
-            {
-                Debug.LogWarning("[MicrophoneCapture] No microphone devices found.");
-                return;
-            }
+                throw new InvalidOperationException("No microphone devices are available.");
+            if (index < 0 || index >= devices.Length)
+                throw new ArgumentOutOfRangeException(nameof(index));
 
-            index = Mathf.Clamp(index, 0, devices.Length - 1);
             CurrentDevice = devices[index];
             CurrentDeviceIndex = index;
             AudioInputChanged?.Invoke(index, CurrentDevice);
@@ -81,10 +79,7 @@ namespace OpenVoiceSharp.Unity
             if (IsRecording) return;
 
             if (Microphone.devices.Length == 0)
-            {
-                Debug.LogError("[MicrophoneCapture] Cannot start recording — no microphones available.");
-                return;
-            }
+                throw new InvalidOperationException("Cannot start recording because no microphone devices are available.");
 
             if (string.IsNullOrEmpty(CurrentDevice))
                 SetToDefaultMicrophone();
