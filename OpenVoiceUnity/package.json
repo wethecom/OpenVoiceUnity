@@ -2,7 +2,7 @@
   "name": "com.openvoicesharp.unity",
   "version": "1.0.0",
   "displayName": "OpenVoiceSharp for Unity",
-  "description": "Vicinity voice chat for Unity MMOs. Built on OpenVoiceSharp (Opus, RNNoise, WebRTC VAD) with FishNet 4.x networking.",
+  "description": "Vicinity voice chat for Unity MMOs. Built on OpenVoiceSharp (Opus, RNNoise, WebRTC VAD) with FishNet 4.x networking and optional Game Creator 2 integration.",
   "unity": "2021.3",
-  "keywords": ["voice", "voicechat", "opus", "fishnet", "mmo", "vicinity"]
+  "keywords": ["voice", "voicechat", "opus", "fishnet", "mmo", "vicinity", "gamecreator2", "gc2"]
 }

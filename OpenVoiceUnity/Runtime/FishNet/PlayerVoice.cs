@@ -37,6 +37,13 @@ namespace OpenVoiceSharp.Unity
         [Tooltip("When true, hold PushToTalkKey to transmit. When false, VAD opens the mic automatically.")]
         [SerializeField] private bool pushToTalk = false;
         [SerializeField] private KeyCode pushToTalkKey = KeyCode.V;
+        [Tooltip("When true, microphone capture is ignored and no voice is transmitted.")]
+        [SerializeField] private bool muted = false;
+        [Tooltip("How long speaking stays active after the last transmitted packet.")]
+        [SerializeField] private float speakingHoldSeconds = 0.25f;
+
+        // Runtime override used by external systems (eg. Game Creator 2) to force transmission.
+        private bool forceTransmit = false;
 
         [Header("Audio Quality")]
         [Tooltip("Opus bitrate in bps. 16000 = 16kbps, fine for voice. Raise to 24000 for richer audio.")]
@@ -65,6 +72,11 @@ namespace OpenVoiceSharp.Unity
         private float[] audioReadFloats = Array.Empty<float>();
 
         private AudioSource audioSource;
+        private bool isSpeaking;
+        private float lastTransmitPacketTime = -1f;
+        private float lastReceivedPacketTime = -1f;
+        private int receivedPacketCount;
+        private int lastReceivedPacketSize;
 
         // ── FishNet lifecycle ──────────────────────────────────────
 
@@ -97,6 +109,7 @@ namespace OpenVoiceSharp.Unity
             encoder = null;
             decoder?.Dispose();
             decoder = null;
+            SetSpeaking(false);
 
             foreach (Guid speakerId in GetSpeakersWithPlayback())
                 FlushSpeakerPlayback(speakerId);
@@ -163,6 +176,13 @@ namespace OpenVoiceSharp.Unity
         private void Update()
         {
             if (!IsOwner) return;
+            if (muted)
+            {
+                SetSpeaking(false);
+                return;
+            }
+
+            bool sentPacketThisFrame = false;
 
             while (micQueue.TryDequeue(out var item))
             {
@@ -170,8 +190,9 @@ namespace OpenVoiceSharp.Unity
                     break;
 
                 // Gate: push to talk key OR voice activity detection built into VoiceChatInterface
-                if (pushToTalk && !Input.GetKey(pushToTalkKey)) continue;
-                if (!pushToTalk && !encoder.IsSpeaking(item.data)) continue;
+                bool shouldTransmit = forceTransmit
+                    || (pushToTalk ? Input.GetKey(pushToTalkKey) : encoder.IsSpeaking(item.data));
+                if (!shouldTransmit) continue;
 
                 var (encoded, encodedLength) = encoder.SubmitAudioData(item.data, item.length);
 
@@ -180,7 +201,14 @@ namespace OpenVoiceSharp.Unity
                 Array.Copy(encoded, packet, encodedLength);
 
                 SendVoiceToServer(packet);
+                sentPacketThisFrame = true;
+                lastTransmitPacketTime = Time.time;
             }
+
+            if (sentPacketThisFrame)
+                SetSpeaking(true);
+            else if (isSpeaking && lastTransmitPacketTime >= 0f && Time.time - lastTransmitPacketTime > speakingHoldSeconds)
+                SetSpeaking(false);
         }
 
         // ── Network ────────────────────────────────────────────────
@@ -202,6 +230,10 @@ namespace OpenVoiceSharp.Unity
 
             var (decoded, decodedLength) = decoder.WhenDataReceived(packet, packet.Length);
             if (decodedLength <= 0) return;
+            lastReceivedPacketTime = Time.time;
+            lastReceivedPacketSize = decodedLength;
+            receivedPacketCount++;
+            VoicePacketReceived?.Invoke(decodedLength);
 
             VoicePlaybackBuffer pb;
             lock (speakerPlaybackLock)
@@ -319,6 +351,61 @@ namespace OpenVoiceSharp.Unity
                 audioReadFloats = new float[sampleCount];
             if (audioReadBytes.Length < requestedBytes)
                 audioReadBytes = new byte[requestedBytes];
+        }
+
+        // ── Public runtime controls (integration hooks) ───────────
+
+        public bool IsMuted => muted;
+        public bool IsSpeaking => isSpeaking;
+        public bool IsPushToTalkEnabled => pushToTalk;
+        public bool IsForceTransmitEnabled => forceTransmit;
+        public KeyCode PushToTalkKey => pushToTalkKey;
+        public float LastTransmitPacketTime => lastTransmitPacketTime;
+        public float LastReceivedPacketTime => lastReceivedPacketTime;
+        public int ReceivedPacketCount => receivedPacketCount;
+        public int LastReceivedPacketSize => lastReceivedPacketSize;
+
+        public event Action<bool> MutedChanged;
+        public event Action<bool> PushToTalkChanged;
+        public event Action<bool> ForceTransmitChanged;
+        public event Action SpeakingStarted;
+        public event Action SpeakingStopped;
+        public event Action<int> VoicePacketReceived;
+
+        public void SetMuted(bool value)
+        {
+            if (muted == value) return;
+            muted = value;
+            MutedChanged?.Invoke(muted);
+        }
+        public void Mute() => SetMuted(true);
+        public void Unmute() => SetMuted(false);
+        public void ToggleMuted() => SetMuted(!muted);
+
+        public void SetPushToTalk(bool value)
+        {
+            if (pushToTalk == value) return;
+            pushToTalk = value;
+            PushToTalkChanged?.Invoke(pushToTalk);
+        }
+        public void TogglePushToTalk() => SetPushToTalk(!pushToTalk);
+        public void SetPushToTalkKey(KeyCode key) => pushToTalkKey = key;
+
+        public void SetForceTransmit(bool value)
+        {
+            if (forceTransmit == value) return;
+            forceTransmit = value;
+            ForceTransmitChanged?.Invoke(forceTransmit);
+        }
+        public void BeginForceTransmit() => SetForceTransmit(true);
+        public void EndForceTransmit() => SetForceTransmit(false);
+
+        private void SetSpeaking(bool value)
+        {
+            if (isSpeaking == value) return;
+            isSpeaking = value;
+            if (isSpeaking) SpeakingStarted?.Invoke();
+            else SpeakingStopped?.Invoke();
         }
     }
 }

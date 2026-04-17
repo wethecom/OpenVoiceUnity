@@ -1,0 +1,20 @@
+{
+    "name": "OpenVoiceSharp.Unity.GameCreator2",
+    "rootNamespace": "OpenVoiceSharp.Unity.GameCreator2",
+    "references": [
+        "OpenVoiceSharp.Unity.FishNet",
+        "GameCreator.Runtime.Common",
+        "GameCreator.Runtime.VisualScripting"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "autoReferenced": false,
+    "defineConstraints": [
+        "OPENVOICE_UNITY_VOICECHAT",
+        "OPENVOICE_GAMECREATOR2"
+    ],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
