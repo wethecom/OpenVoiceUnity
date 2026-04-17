@@ -1,5 +1,5 @@
 using System;
-using System.Buffers;
+using System.Collections.Generic;
 using System.Collections.Concurrent;
 using FishNet.Object;
 using FishNet.Transporting;
@@ -20,7 +20,7 @@ namespace OpenVoiceSharp.Unity
     /// HOW IT WORKS:
     ///   Owner:    MicrophoneCapture → VoiceChatInterface.SubmitAudioData (encode + VAD + noise suppression)
     ///             → ServerRpc (unreliable) → ObserversRpc (unreliable, distance scoped by FishNet)
-    ///   Receiver: VoiceChatInterface.WhenDataReceived (decode) → CircularAudioBuffer
+    ///   Receiver: VoiceChatInterface.WhenDataReceived (decode) → VoicePlaybackBuffer
     ///             → OnAudioFilterRead → Unity AudioSource (handles distance rolloff)
     /// </summary>
     [RequireComponent(typeof(AudioSource))]
@@ -57,20 +57,12 @@ namespace OpenVoiceSharp.Unity
 
         private VoiceChatInterface decoder;
 
-        // Thread-safe queue between network decode and Unity audio thread.
-        // Buffers are rented from ArrayPool to avoid per-packet GC allocations.
-        private readonly ConcurrentQueue<QueuedSamples> playbackQueue = new();
-        private QueuedSamples activePlayback;
-        private int activePlaybackIndex;
-        private bool hasActivePlayback;
-
-        private const int MaxQueuedFrames = 64;
-
-        private struct QueuedSamples
-        {
-            public float[] Buffer;
-            public int Length;
-        }
+        // Session-style playback map; this implementation uses one speaker per PlayerVoice instance.
+        private readonly Dictionary<Guid, VoicePlaybackBuffer> speakerPlayback = new();
+        private readonly object speakerPlaybackLock = new();
+        private readonly Guid localSpeakerId = Guid.NewGuid();
+        private byte[] audioReadBytes = Array.Empty<byte>();
+        private float[] audioReadFloats = Array.Empty<float>();
 
         private AudioSource audioSource;
 
@@ -106,7 +98,8 @@ namespace OpenVoiceSharp.Unity
             decoder?.Dispose();
             decoder = null;
 
-            FlushPlaybackQueue();
+            foreach (Guid speakerId in GetSpeakersWithPlayback())
+                FlushSpeakerPlayback(speakerId);
         }
 
         // ── Setup ──────────────────────────────────────────────────
@@ -116,6 +109,11 @@ namespace OpenVoiceSharp.Unity
             // One VoiceChatInterface per remote speaker for decode — no encoder needed on this side.
             // EnableNoiseSuppression = false on the decoder: noise suppression was already applied by the sender.
             decoder = new VoiceChatInterface(enableNoiseSuppression: false);
+            lock (speakerPlaybackLock)
+            {
+                if (!speakerPlayback.ContainsKey(localSpeakerId))
+                    speakerPlayback[localSpeakerId] = new VoicePlaybackBuffer();
+            }
 
             audioSource = GetComponent<AudioSource>();
             audioSource.spatialBlend = 1f;                        // full 3D so distance rolloff works
@@ -205,85 +203,122 @@ namespace OpenVoiceSharp.Unity
             var (decoded, decodedLength) = decoder.WhenDataReceived(packet, packet.Length);
             if (decodedLength <= 0) return;
 
-            // WhenDataReceived returns 16-bit PCM bytes.
-            // decodedLength bytes / 2 = sample count (16-bit = 2 bytes per sample).
-            int sampleCount = decodedLength / 2;
-            float[] rented = ArrayPool<float>.Shared.Rent(sampleCount);
-
-            // Convert only the valid decoded samples into the rented buffer.
-            for (int i = 0; i < sampleCount; i++)
+            VoicePlaybackBuffer pb;
+            lock (speakerPlaybackLock)
             {
-                short s = BitConverter.ToInt16(decoded, i * 2);
-                rented[i] = s / 32768f;
+                if (!speakerPlayback.TryGetValue(localSpeakerId, out pb))
+                {
+                    pb = new VoicePlaybackBuffer();
+                    speakerPlayback[localSpeakerId] = pb;
+                }
             }
 
-            playbackQueue.Enqueue(new QueuedSamples
-            {
-                Buffer = rented,
-                Length = sampleCount
-            });
-
-            // Avoid unbounded latency/memory growth when receivers fall behind.
-            while (playbackQueue.Count > MaxQueuedFrames)
-            {
-                if (!playbackQueue.TryDequeue(out QueuedSamples dropped))
-                    break;
-                ArrayPool<float>.Shared.Return(dropped.Buffer);
-            }
+            pb.Enqueue(decoded, decodedLength);
         }
 
         // ── Audio Thread ───────────────────────────────────────────
 
         // Unity calls this on its audio thread every DSP tick.
-        // We drain the CircularAudioBuffer into Unity's output buffer.
+        // We pull a fixed PCM16 byte count from VoicePlaybackBuffer into Unity's output buffer.
         // AudioSource handles 3D distance rolloff automatically.
         private void OnAudioFilterRead(float[] data, int channels)
         {
             int sampleCount = data.Length / channels;
+            int requestedBytes = sampleCount * 2; // mono PCM16
+            EnsureAudioScratchCapacity(sampleCount, requestedBytes);
+
+            ReadSpeakerPlayback(localSpeakerId, audioReadBytes, requestedBytes);
+            int conversionLength = requestedBytes;
+            if ((conversionLength & 1) != 0)
+                conversionLength--;
+            VoiceUtilities.Convert16BitToFloat(audioReadBytes, audioReadFloats, conversionLength);
 
             for (int i = 0; i < sampleCount; i++)
             {
-                float sample = 0f;
-
-                if (!hasActivePlayback)
-                {
-                    if (playbackQueue.TryDequeue(out QueuedSamples next))
-                    {
-                        activePlayback = next;
-                        activePlaybackIndex = 0;
-                        hasActivePlayback = true;
-                    }
-                }
-
-                if (hasActivePlayback)
-                {
-                    sample = activePlayback.Buffer[activePlaybackIndex++];
-                    if (activePlaybackIndex >= activePlayback.Length)
-                    {
-                        ArrayPool<float>.Shared.Return(activePlayback.Buffer);
-                        activePlayback = default;
-                        activePlaybackIndex = 0;
-                        hasActivePlayback = false;
-                    }
-                }
-
+                float sample = audioReadFloats[i];
                 for (int c = 0; c < channels; c++)
                     data[i * channels + c] = sample;
             }
         }
 
-        private void FlushPlaybackQueue()
+        public int ReadSpeakerPlayback(Guid speakerId, byte[] destination, int requestedBytes, int destinationOffset = 0)
         {
-            while (playbackQueue.TryDequeue(out QueuedSamples queued))
-                ArrayPool<float>.Shared.Return(queued.Buffer);
+            if (destination is null)
+                throw new ArgumentNullException(nameof(destination));
 
-            if (hasActivePlayback)
+            VoicePlaybackBuffer pb;
+            lock (speakerPlaybackLock)
             {
-                ArrayPool<float>.Shared.Return(activePlayback.Buffer);
-                activePlayback = default;
-                activePlaybackIndex = 0;
-                hasActivePlayback = false;
+                if (!speakerPlayback.TryGetValue(speakerId, out pb))
+                {
+                    if (requestedBytes > 0)
+                        Array.Clear(destination, destinationOffset, requestedBytes);
+                    return 0;
+                }
             }
+
+            return pb.ReadAndFillSilence(destination, requestedBytes, destinationOffset);
+        }
+
+        public void FlushSpeakerPlayback(Guid speakerId)
+        {
+            VoicePlaybackBuffer pb;
+            lock (speakerPlaybackLock)
+            {
+                if (!speakerPlayback.TryGetValue(speakerId, out pb))
+                    return;
+            }
+
+            pb.Flush();
+        }
+
+        /// <summary>
+        /// Reads any currently buffered speaker bytes (up to <paramref name="maxBytes"/>)
+        /// without zero-fill. Useful for "play tail once, then stop" flows.
+        /// </summary>
+        public int DrainSpeakerPlayback(Guid speakerId, byte[] destination, int maxBytes, int destinationOffset = 0)
+        {
+            if (destination is null)
+                throw new ArgumentNullException(nameof(destination));
+
+            VoicePlaybackBuffer pb;
+            lock (speakerPlaybackLock)
+            {
+                if (!speakerPlayback.TryGetValue(speakerId, out pb))
+                    return 0;
+            }
+
+            return pb.ReadAvailable(destination, maxBytes, destinationOffset);
+        }
+
+        /// <summary>
+        /// Drains available speaker tail bytes once, then flushes any remainder.
+        /// Returns number of bytes drained.
+        /// </summary>
+        public int DrainAndFlushSpeakerPlayback(Guid speakerId, byte[] destination, int maxBytes, int destinationOffset = 0)
+        {
+            int drained = DrainSpeakerPlayback(speakerId, destination, maxBytes, destinationOffset);
+            FlushSpeakerPlayback(speakerId);
+            return drained;
+        }
+
+        public IReadOnlyCollection<Guid> GetSpeakersWithPlayback()
+        {
+            Guid[] ids;
+            lock (speakerPlaybackLock)
+            {
+                ids = new Guid[speakerPlayback.Count];
+                speakerPlayback.Keys.CopyTo(ids, 0);
+            }
+            return ids;
+        }
+
+        private void EnsureAudioScratchCapacity(int sampleCount, int requestedBytes)
+        {
+            if (audioReadFloats.Length < sampleCount)
+                audioReadFloats = new float[sampleCount];
+            if (audioReadBytes.Length < requestedBytes)
+                audioReadBytes = new byte[requestedBytes];
         }
     }
 }
