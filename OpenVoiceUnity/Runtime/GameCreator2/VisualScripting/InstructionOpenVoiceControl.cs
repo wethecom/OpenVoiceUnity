@@ -26,13 +26,14 @@ namespace OpenVoiceSharp.Unity.GameCreator2.VisualScripting
         }
 
         [SerializeField] private PropertyGetGameObject player = GetGameObjectSelf.Create();
+        [SerializeField] private GameObject playerFallback;
         [SerializeField] private PlayerVoice playerVoice;
         [SerializeField] private bool requireOwnership = true;
         [SerializeField] private VoiceAction action = VoiceAction.ToggleMute;
 
         protected override Task Run(Args args)
         {
-            PlayerVoice voice = OpenVoiceGc2Resolver.ResolveVoice(player, args, playerVoice, requireOwnership);
+            PlayerVoice voice = OpenVoiceGc2Resolver.ResolveVoice(player, playerFallback, args, playerVoice, requireOwnership);
             if (voice == null) return DefaultResult;
 
             switch (action)

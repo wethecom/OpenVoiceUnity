@@ -20,6 +20,7 @@ namespace OpenVoiceSharp.Unity.GameCreator2.VisualScripting
         }
 
         [SerializeField] private PropertyGetGameObject player = GetGameObjectSelf.Create();
+        [SerializeField] private GameObject playerFallback;
         [SerializeField] private PlayerVoice playerVoice;
         [SerializeField] private bool requireOwnership = true;
         [SerializeField] private VoiceState state = VoiceState.Muted;
@@ -27,7 +28,7 @@ namespace OpenVoiceSharp.Unity.GameCreator2.VisualScripting
 
         protected override bool Run(Args args)
         {
-            PlayerVoice voice = OpenVoiceGc2Resolver.ResolveVoice(player, args, playerVoice, requireOwnership);
+            PlayerVoice voice = OpenVoiceGc2Resolver.ResolveVoice(player, playerFallback, args, playerVoice, requireOwnership);
             if (voice == null) return false;
 
             bool current = state switch

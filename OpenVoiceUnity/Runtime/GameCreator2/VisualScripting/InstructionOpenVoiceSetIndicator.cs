@@ -22,10 +22,12 @@ namespace OpenVoiceSharp.Unity.GameCreator2.VisualScripting
         }
 
         [SerializeField] private PropertyGetGameObject player = GetGameObjectSelf.Create();
+        [SerializeField] private GameObject playerFallback;
         [SerializeField] private PlayerVoice playerVoice;
         [SerializeField] private bool requireOwnership = true;
 
         [SerializeField] private PropertyGetGameObject indicator = GetGameObjectSelf.Create();
+        [SerializeField] private GameObject indicatorFallback;
         [SerializeField] private GameObject indicatorObject;
 
         [SerializeField] private VoiceState state = VoiceState.Muted;
@@ -33,7 +35,7 @@ namespace OpenVoiceSharp.Unity.GameCreator2.VisualScripting
 
         protected override Task Run(Args args)
         {
-            PlayerVoice voice = OpenVoiceGc2Resolver.ResolveVoice(player, args, playerVoice, requireOwnership);
+            PlayerVoice voice = OpenVoiceGc2Resolver.ResolveVoice(player, playerFallback, args, playerVoice, requireOwnership);
             GameObject go = ResolveIndicator(args);
             if (voice == null || go == null) return DefaultResult;
 
@@ -46,13 +48,7 @@ namespace OpenVoiceSharp.Unity.GameCreator2.VisualScripting
 
         private GameObject ResolveIndicator(Args args)
         {
-            if (indicator != null)
-            {
-                GameObject fromProperty = indicator.Get(args);
-                if (fromProperty != null) return fromProperty;
-            }
-
-            return indicatorObject;
+            return OpenVoiceGc2Resolver.ResolveGameObject(indicator, indicatorFallback, args, indicatorObject);
         }
 
         private bool ReadState(PlayerVoice voice)

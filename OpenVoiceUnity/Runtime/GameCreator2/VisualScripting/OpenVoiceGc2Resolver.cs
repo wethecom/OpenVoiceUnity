@@ -9,6 +9,7 @@ namespace OpenVoiceSharp.Unity.GameCreator2.VisualScripting
     {
         public static PlayerVoice ResolveVoice(
             PropertyGetGameObject source,
+            GameObject sourceFallback,
             Args args,
             PlayerVoice fallback,
             bool requireOwnership
@@ -16,19 +17,80 @@ namespace OpenVoiceSharp.Unity.GameCreator2.VisualScripting
         {
             if (source != null)
             {
-                GameObject target = source.Get(args);
-                if (target != null && target.TryGetComponent(out PlayerVoice fromProperty))
-                    return IsAllowed(fromProperty, requireOwnership) ? fromProperty : null;
+                GameObject fromProperty = source.Get(args);
+                if (fromProperty != null && fromProperty.TryGetComponent(out PlayerVoice fromSourceProperty))
+                    return IsAllowed(fromSourceProperty, requireOwnership) ? fromSourceProperty : null;
             }
+
+            if (sourceFallback != null && sourceFallback.TryGetComponent(out PlayerVoice fromSource))
+                return IsAllowed(fromSource, requireOwnership) ? fromSource : null;
 
             if (fallback != null)
                 return IsAllowed(fallback, requireOwnership) ? fallback : null;
 
-            if (args.Self != null && args.Self.TryGetComponent(out PlayerVoice fromSelf))
+            if (args != null && args.Self != null && args.Self.TryGetComponent(out PlayerVoice fromSelf))
                 return IsAllowed(fromSelf, requireOwnership) ? fromSelf : null;
 
-            if (args.Target != null && args.Target.TryGetComponent(out PlayerVoice fromTarget))
+            if (args != null && args.Target != null && args.Target.TryGetComponent(out PlayerVoice fromTarget))
                 return IsAllowed(fromTarget, requireOwnership) ? fromTarget : null;
+
+            return null;
+        }
+
+        public static OpenVoiceVoicePreferences ResolvePreferences(
+            PropertyGetGameObject source,
+            GameObject sourceFallback,
+            Args args,
+            OpenVoiceVoicePreferences fallback
+        )
+        {
+            if (source != null)
+            {
+                GameObject fromProperty = source.Get(args);
+                if (fromProperty != null && fromProperty.TryGetComponent(out OpenVoiceVoicePreferences fromSourceProperty))
+                    return fromSourceProperty;
+            }
+
+            if (sourceFallback != null && sourceFallback.TryGetComponent(out OpenVoiceVoicePreferences fromSource))
+                return fromSource;
+
+            if (fallback != null)
+                return fallback;
+
+            if (args != null && args.Self != null && args.Self.TryGetComponent(out OpenVoiceVoicePreferences fromSelf))
+                return fromSelf;
+
+            if (args != null && args.Target != null && args.Target.TryGetComponent(out OpenVoiceVoicePreferences fromTarget))
+                return fromTarget;
+
+            return null;
+        }
+
+        public static GameObject ResolveGameObject(
+            PropertyGetGameObject source,
+            GameObject sourceFallback,
+            Args args,
+            GameObject fallback
+        )
+        {
+            if (source != null)
+            {
+                GameObject fromProperty = source.Get(args);
+                if (fromProperty != null)
+                    return fromProperty;
+            }
+
+            if (sourceFallback != null)
+                return sourceFallback;
+
+            if (fallback != null)
+                return fallback;
+
+            if (args != null && args.Self != null)
+                return args.Self;
+
+            if (args != null && args.Target != null)
+                return args.Target;
 
             return null;
         }

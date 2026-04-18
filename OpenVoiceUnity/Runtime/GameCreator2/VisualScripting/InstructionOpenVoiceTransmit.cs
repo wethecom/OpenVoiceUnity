@@ -14,13 +14,14 @@ namespace OpenVoiceSharp.Unity.GameCreator2.VisualScripting
     public class InstructionOpenVoiceTransmit : Instruction
     {
         [SerializeField] private PropertyGetGameObject player = GetGameObjectSelf.Create();
+        [SerializeField] private GameObject playerFallback;
         [SerializeField] private PlayerVoice playerVoice;
         [SerializeField] private bool requireOwnership = true;
         [SerializeField] private bool transmitting = true;
 
         protected override Task Run(Args args)
         {
-            PlayerVoice voice = OpenVoiceGc2Resolver.ResolveVoice(player, args, playerVoice, requireOwnership);
+            PlayerVoice voice = OpenVoiceGc2Resolver.ResolveVoice(player, playerFallback, args, playerVoice, requireOwnership);
             if (voice != null) voice.SetForceTransmit(transmitting);
             return DefaultResult;
         }

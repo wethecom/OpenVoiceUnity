@@ -21,6 +21,7 @@ namespace OpenVoiceSharp.Unity.GameCreator2.VisualScripting
         }
 
         [SerializeField] private PropertyGetGameObject target = GetGameObjectSelf.Create();
+        [SerializeField] private GameObject targetFallback;
         [SerializeField] private OpenVoiceVoicePreferences preferences;
         [SerializeField] private PreferencesAction action = PreferencesAction.Save;
 
@@ -41,17 +42,7 @@ namespace OpenVoiceSharp.Unity.GameCreator2.VisualScripting
 
         private OpenVoiceVoicePreferences ResolvePreferences(Args args)
         {
-            if (preferences != null) return preferences;
-            if (target != null)
-            {
-                GameObject go = target.Get(args);
-                if (go != null && go.TryGetComponent(out OpenVoiceVoicePreferences fromGo))
-                    return fromGo;
-            }
-
-            return args.Self != null && args.Self.TryGetComponent(out OpenVoiceVoicePreferences fromSelf)
-                ? fromSelf
-                : null;
+            return OpenVoiceGc2Resolver.ResolvePreferences(target, targetFallback, args, preferences);
         }
     }
 }
